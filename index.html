@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Estrada Sem Fim</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:#1b1420;color:#fff4e6;font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif}
+#wrap{height:100%;display:flex;align-items:center;justify-content:center;padding:8px}
+#box{position:relative;width:100%;max-width:960px;aspect-ratio:16/9;max-height:100%;border-radius:14px;overflow:hidden;box-shadow:0 10px 36px #000a}
+canvas{width:100%;height:100%;display:block;touch-action:none}
+#menu{position:absolute;inset:0;background:#1b1420ee;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.4vmin;padding:2vmin;text-align:center}
+h1{margin:0;font-size:clamp(20px,5vmin,40px);letter-spacing:.5px;color:#ffb347}
+#res{margin:0;font-size:clamp(13px,2.6vmin,20px)}
+#coins{margin:0;font-size:clamp(13px,2.6vmin,20px);color:#ffd98a;font-weight:bold}
+#ups{display:grid;grid-template-columns:repeat(3,1fr);gap:1.6vmin;width:100%;max-width:760px}
+.card{display:flex;flex-direction:column;gap:.6vmin;align-items:center;padding:1.6vmin;border:2px solid #ffb347;border-radius:10px;background:#2c2030;color:inherit;font:inherit;cursor:pointer;font-size:clamp(11px,2.2vmin,16px)}
+.card small{opacity:.8;font-size:.85em}
+.card em{font-style:normal;font-weight:bold;color:#ffd98a}
+.card:hover:not(:disabled){background:#3d2c40}
+.card:disabled{opacity:.45;cursor:not-allowed;border-color:#6b5a70}
+#go{padding:1.4vmin 5vmin;border:0;border-radius:999px;background:#ffb347;color:#2a1608;font:bold clamp(15px,3vmin,24px) inherit;cursor:pointer}
+#go:hover{background:#ffc873}
+button:focus-visible{outline:3px solid #fff;outline-offset:2px}
+</style>
+</head>
+<body>
+<div id="wrap"><div id="box">
+<canvas id="c"></canvas>
+<div id="menu">
+  <h1>Estrada Sem Fim</h1>
+  <p id="res"></p>
+  <p id="coins"></p>
+  <div id="ups"></div>
+  <button id="go">Correr</button>
+</div>
+</div></div>
+<script>
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');
+const W=800,H=450;cv.width=W;cv.height=H;
+const menu=document.getElementById('menu'),res=document.getElementById('res'),
+      coinsEl=document.getElementById('coins'),ups=document.getElementById('ups');
+
+/* ---------- Progresso salvo ---------- */
+let save={coins:0,up:[0,0,0],best:0};
+try{const s=JSON.parse(localStorage.getItem('estrada_save'));if(s&&Array.isArray(s.up))save=s}catch(e){}
+function persist(){try{localStorage.setItem('estrada_save',JSON.stringify(save))}catch(e){}}
+
+/* ---------- Melhorias ---------- */
+const UP=[
+ {n:'Motor',d:'Mais força para acelerar e subir'},
+ {n:'Tanque',d:'Mais gasolina para ir mais longe'},
+ {n:'Suspensão e rodas',d:'Menos perda de velocidade no terreno irregular'}
+];
+const MAXL=10;
+const cost=l=>Math.round(100*Math.pow(1.7,l));
+
+/* ---------- Terreno: fica mais íngreme e irregular com a distância ---------- */
+function g(x){
+  const rough=Math.min(1,x/4000), amp=0.4+Math.min(1.3,x/6000);
+  return 330+amp*(Math.sin(x/300)*70+Math.sin(x/110)*25)+rough*(Math.sin(x/29)*7+Math.sin(x/13)*3);
+}
+
+/* ---------- Estado do jogo ---------- */
+let st='menu',x,v,fuel,maxFuel,power,susp,r,bodyY,bodyAng,rot,camX,camY,stuck;
+const keys={gas:false,brake:false},ptr={gas:false,brake:false};
+
+function init(){
+  const [m,t,s]=save.up;
+  power=170+m*28; maxFuel=14+t*4; susp=s; r=16+s*0.8;
+  x=0;v=0;fuel=maxFuel;rot=0;stuck=0;bodyAng=0;
+  bodyY=g(0)-r-14;camX=-250;camY=bodyY-280;
+}
+function start(){init();st='run';menu.style.display='none'}
+
+function endRun(reason){
+  const m=Math.floor(x/20);
+  save.coins+=m; if(m>save.best)save.best=m; persist();
+  st='menu';
+  showMenu(reason+' Você percorreu '+m+' m e ganhou '+m+' moedas.');
+}
+
+function showMenu(msg){
+  res.textContent=msg||'Melhore o carro e vá mais longe.';
+  coinsEl.textContent='Moedas: '+save.coins+'   |   Recorde: '+save.best+' m';
+  ups.innerHTML='';
+  UP.forEach((u,i)=>{
+    const l=save.up[i],c=cost(l),max=l>=MAXL;
+    const b=document.createElement('button');
+    b.className='card';b.disabled=max||save.coins<c;
+    b.innerHTML='<b>'+u.n+'</b><small>'+u.d+'</small><span>Nível '+l+' de '+MAXL+'</span><em>'+(max?'Nível máximo':c+' moedas')+'</em>';
+    b.onclick=()=>{save.coins-=c;save.up[i]++;persist();init();showMenu(msg)};
+    ups.appendChild(b);
+  });
+  menu.style.display='flex';
+}
+
+/* ---------- Física ---------- */
+function update(dt){
+  if(st!=='run')return;
+  const th=(keys.gas||ptr.gas)&&fuel>0?1:0, br=(keys.brake||ptr.brake)?1:0;
+  const xr=x-28,xf=x+28,yr=g(xr),yf=g(xf),ym=g(x);
+  const ang=Math.atan((yf-yr)/56);
+  let a=th*power+300*Math.sin(ang)-0.5*v;         // motor + inclinação - atrito do ar
+  if(br&&v>0)a-=260;                               // freio
+  const bump=Math.abs(yr+yf-2*ym);                 // irregularidade do terreno
+  a-=bump*v*0.04*(1-0.085*susp);                   // suspensão reduz a perda
+  v=Math.max(0,v+a*dt);
+  x+=v*dt;
+  fuel=Math.max(0,fuel-dt*(th?1:0.12));
+  rot+=v/r*dt;
+  bodyAng+=(ang-bodyAng)*Math.min(1,dt*(8+susp));
+  const ty=(yr+yf)/2-r-14;
+  bodyY+=(ty-bodyY)*Math.min(1,dt*(6+susp*2));
+  if(th&&v<4){stuck+=dt;if(stuck>2)return endRun('O carro parou na ladeira.')}else stuck=0;
+  if(fuel<=0&&v<6)return endRun('A gasolina acabou.');
+}
+
+/* ---------- Desenho ---------- */
+function draw(){
+  camX+=((x-250)-camX)*0.2; camY+=((bodyY-280)-camY)*0.08;
+  const sky=ctx.createLinearGradient(0,0,0,H);
+  sky.addColorStop(0,'#3a2a5c');sky.addColorStop(.6,'#c8567a');sky.addColorStop(1,'#ffb347');
+  ctx.fillStyle=sky;ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='#ffe3a8';ctx.beginPath();ctx.arc(620,130,40,0,7);ctx.fill();
+  // montanhas distantes (paralaxe)
+  ctx.fillStyle='#5a3a6e';ctx.beginPath();ctx.moveTo(0,H);
+  for(let sx=0;sx<=W;sx+=10){const wx=sx+camX*0.25;ctx.lineTo(sx,250+Math.sin(wx/170)*45+Math.sin(wx/61)*14-camY*0.15)}
+  ctx.lineTo(W,H);ctx.fill();
+  // chão
+  ctx.beginPath();ctx.moveTo(0,H);
+  for(let sx=0;sx<=W;sx+=4)ctx.lineTo(sx,g(camX+sx)-camY);
+  ctx.lineTo(W,H);ctx.closePath();ctx.fillStyle='#4a2c2a';ctx.fill();
+  ctx.beginPath();
+  for(let sx=0;sx<=W;sx+=4){const y=g(camX+sx)-camY;sx?ctx.lineTo(sx,y):ctx.moveTo(sx,y)}
+  ctx.strokeStyle='#8fb339';ctx.lineWidth=6;ctx.stroke();
+  // marcas de distância a cada 100 m
+  ctx.fillStyle='#fff4e6';ctx.font='12px sans-serif';
+  for(let m=Math.ceil((camX)/2000)*100;m*20<camX+W;m+=100){const px=m*20-camX;ctx.fillRect(px,g(m*20)-camY-34,3,34);ctx.fillText(m+' m',px+6,g(m*20)-camY-24)}
+  // carro
+  const cx=x-camX,cy=bodyY-camY;
+  ctx.save();ctx.translate(cx,cy);ctx.rotate(bodyAng);
+  ctx.fillStyle='#e8472b';ctx.fillRect(-38,-10,76,20);
+  ctx.fillStyle='#c93a20';ctx.fillRect(-16,-24,32,15);
+  ctx.fillStyle='#bfe6ff';ctx.fillRect(-12,-21,11,9);ctx.fillRect(2,-21,11,9);
+  ctx.fillStyle='#ffe066';ctx.fillRect(34,-6,5,6);
+  ctx.restore();
+  for(const wx of [x-28,x+28]){
+    const px=wx-camX,py=g(wx)-r-camY;
+    ctx.fillStyle='#1c1c22';ctx.beginPath();ctx.arc(px,py,r,0,7);ctx.fill();
+    ctx.strokeStyle='#d8d8e0';ctx.lineWidth=3;ctx.beginPath();
+    ctx.moveTo(px+Math.cos(rot)*r*.7,py+Math.sin(rot)*r*.7);ctx.lineTo(px-Math.cos(rot)*r*.7,py-Math.sin(rot)*r*.7);ctx.stroke();
+  }
+  // HUD
+  if(st==='run'){
+    ctx.fillStyle='#0008';ctx.fillRect(14,14,200,16);
+    ctx.fillStyle=fuel/maxFuel>.25?'#ffb347':'#ff4d4d';ctx.fillRect(14,14,200*fuel/maxFuel,16);
+    ctx.fillStyle='#fff4e6';ctx.font='bold 14px sans-serif';
+    ctx.fillText('Gasolina',222,27);
+    ctx.font='bold 22px sans-serif';ctx.fillText(Math.floor(x/20)+' m',14,56);
+    ctx.font='12px sans-serif';ctx.fillText('Segure a tela (ou seta direita) para acelerar. Lado esquerdo (ou seta esquerda) para frear.',14,H-12);
+  }
+}
+
+/* ---------- Controles ---------- */
+const down={ArrowRight:'gas',d:'gas',' ':'gas',ArrowUp:'gas',ArrowLeft:'brake',a:'brake',ArrowDown:'brake'};
+addEventListener('keydown',e=>{const k=down[e.key];if(k){keys[k]=true;e.preventDefault()}});
+addEventListener('keyup',e=>{const k=down[e.key];if(k)keys[k]=false});
+function setPtr(e,on){
+  const rect=cv.getBoundingClientRect();
+  const left=(e.clientX-rect.left)/rect.width<0.33;
+  ptr.gas=on&&!left;ptr.brake=on&&left;
+}
+cv.addEventListener('pointerdown',e=>setPtr(e,true));
+cv.addEventListener('pointermove',e=>{if(ptr.gas||ptr.brake)setPtr(e,true)});
+['pointerup','pointercancel','pointerleave'].forEach(n=>cv.addEventListener(n,e=>setPtr(e,false)));
+document.getElementById('go').onclick=start;
+
+/* ---------- Loop ---------- */
+let last=performance.now();
+function loop(t){
+  const dt=Math.min(0.033,(t-last)/1000);last=t;
+  update(dt);draw();requestAnimationFrame(loop);
+}
+init();showMenu();requestAnimationFrame(loop);
+</script>
+</body>
+</html>
